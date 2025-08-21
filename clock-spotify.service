@@ -1,0 +1,15 @@
+[Unit]
+Description=Spotify E-Paper Clock
+After=network.target
+
+[Service]
+ExecStart=/root/pizero-clock/startup.sh
+WorkingDirectory=/root/pizero-clock/python
+StandardOutput=journal
+StandardError=journal
+Restart=always
+User=root
+
+[Install]
+WantedBy=multi-user.target
+

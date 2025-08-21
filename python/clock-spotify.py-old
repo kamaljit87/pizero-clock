@@ -1,0 +1,103 @@
+#!/usr/bin/env python
+# encoding: utf-8
+
+import epd2in13b_V4
+import time
+from PIL import Image, ImageDraw, ImageFont
+from time import localtime, strftime
+import spotipy
+from spotipy.oauth2 import SpotifyOAuth
+import os
+from dotenv import load_dotenv
+
+# ---- Load secrets from .env ----
+load_dotenv()
+SPOTIFY_CLIENT_ID = os.getenv("SPOTIFY_CLIENT_ID")
+SPOTIFY_CLIENT_SECRET = os.getenv("SPOTIFY_CLIENT_SECRET")
+SPOTIFY_REDIRECT_URI = os.getenv("SPOTIFY_REDIRECT_URI", "http://localhost:8888/callback")
+
+sp = spotipy.Spotify(auth_manager=SpotifyOAuth(
+    client_id=SPOTIFY_CLIENT_ID,
+    client_secret=SPOTIFY_CLIENT_SECRET,
+    redirect_uri=SPOTIFY_REDIRECT_URI,
+    scope="user-read-currently-playing"
+))
+
+def get_spotify_song():
+    try:
+        track = sp.current_user_playing_track()
+        if track and track['item']:
+            song = track['item']['name']
+            artist = ", ".join([a['name'] for a in track['item']['artists']])
+            return f"{artist} – {song}"
+        else:
+            return "No song playing"
+    except Exception as e:
+        print("Spotify error:", e)
+        return "Spotify unavailable"
+
+def update(epd):
+    width = epd2in13b_V4.EPD_HEIGHT
+    height = epd2in13b_V4.EPD_WIDTH
+
+    # Fonts
+    font_time = ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSerif-Bold.ttf', 40)
+    font_date = ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSerif.ttf', 16)
+    font_song = ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSerif.ttf', 14)
+
+    while True:
+        frame_black = Image.new('1', (width, height), 255)
+        frame_red = Image.new('1', (width, height), 255)
+        draw_black = ImageDraw.Draw(frame_black)
+
+        # Time + date
+        current_time = strftime("%H:%M", localtime())
+        current_date = strftime("%a, %d %b %Y", localtime())
+
+        # Song
+        spotify_song = get_spotify_song()
+
+        # Measure text sizes
+        w_time, h_time = draw_black.textsize(current_time, font=font_time)
+        w_date, h_date = draw_black.textsize(current_date, font=font_date)
+        w_song, h_song = draw_black.textsize(spotify_song, font=font_song)
+
+        # Positions (centered)
+        x_time = (width - w_time) // 2
+        y_time = (height // 2) - h_time
+        x_date = (width - w_date) // 2
+        y_date = y_time + h_time + 10
+        x_song = (width - w_song) // 2
+        y_song = y_date + h_date + 10
+
+        # Draw
+        draw_black.text((x_time, y_time), current_time, font=font_time, fill=0)
+        draw_black.text((x_date, y_date), current_date, font=font_date, fill=0)
+        draw_black.text((x_song, y_song), spotify_song, font=font_song, fill=0)
+
+        # Display rotated 180°
+        epd.display(
+            epd.getbuffer(frame_black.transpose(Image.ROTATE_180)),
+            epd.getbuffer(frame_red.transpose(Image.ROTATE_180))
+        )
+
+        # Sleep
+        print(f"Updated at {current_time}, sleeping 60 sec")
+        epd.sleep()
+        time.sleep(60)
+        epd.init()
+
+def main():
+    print("Initializing screen...")
+    epd = epd2in13b_V4.EPD()
+    epd.init()
+    epd.Clear()
+    try:
+        update(epd)
+    finally:
+        print("Putting display to sleep before exit")
+        epd.sleep()
+
+if __name__ == '__main__':
+    main()
+
