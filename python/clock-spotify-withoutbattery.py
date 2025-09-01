@@ -8,25 +8,20 @@ import spotipy
 from spotipy.oauth2 import SpotifyOAuth
 import epd2in13b_V4
 from PIL import Image as PILImage
-from ina219 import INA219
 
 # ---------- Config ----------
+# Update cadence
 POLL_SEC = 5          # how often we poll Spotify/time
 ROTATE = 180          # display rotation
-# Fonts
+# Fonts (adjust sizes to taste)
 FONT_TIME_PATH = '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf'
 FONT_TEXT_PATH = '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf'
 FONT_TIME_SIZE = 40
 FONT_DATE_SIZE = 16
 FONT_SONG_SIZE = 14
 
-# ---------- Battery config ----------
-BATTERY_MIN_V = 3.0   # LiPo discharge floor
-BATTERY_MAX_V = 4.2   # LiPo full charge
-INA219_ADDR = 0x43    # Waveshare UPS HAT detected here
-
 # ---------- Spotify auth ----------
-load_dotenv()
+load_dotenv()  # reads .env
 SPOTIFY_CLIENT_ID = os.getenv("SPOTIFY_CLIENT_ID")
 SPOTIFY_CLIENT_SECRET = os.getenv("SPOTIFY_CLIENT_SECRET")
 SPOTIFY_REDIRECT_URI = os.getenv("SPOTIFY_REDIRECT_URI", "http://localhost:8888/callback")
@@ -44,6 +39,7 @@ def get_song_title_only():
         track = sp.current_user_playing_track()
         if track and track.get('item') and track.get('is_playing'):
             return track['item']['name'] or "Unknown track"
+        # If nothing is playing, fall back to last track name if present
         if track and track.get('item'):
             return track['item']['name'] or "No music playing"
         return "No music playing"
@@ -51,58 +47,17 @@ def get_song_title_only():
         print("Spotify error:", e)
         return "Spotify unavailable"
 
-# ---------- Battery helper ----------
-def get_battery_level():
-    """Read voltage from INA219 at 0x43 and convert to %."""
-    try:
-        ina = INA219(shunt_ohms=0.1, max_expected_amps=2, address=INA219_ADDR)
-        ina.configure()
-        voltage = ina.voltage()
-
-        # Clamp voltage range
-        if voltage < BATTERY_MIN_V:
-            voltage = BATTERY_MIN_V
-        elif voltage > BATTERY_MAX_V:
-            voltage = BATTERY_MAX_V
-
-        percent = int(((voltage - BATTERY_MIN_V) / (BATTERY_MAX_V - BATTERY_MIN_V)) * 100)
-        return percent
-    except Exception as e:
-        print("Battery read error:", e)
-        return -1  # means "N/A"
-
-def draw_battery(draw_b, draw_r, x, y, level, font):
-    """
-    Draw a battery icon + percentage at (x, y).
-    Use red if battery is low (<20%).
-    """
-    width, height = 30, 14   # battery body
-    cap_width = 3
-
-    pct_txt = f"{level}%" if level >= 0 else "N/A"
-
-    # Choose canvas: red if low, else black
-    target = draw_r if (level >= 0 and level < 20) else draw_b
-
-    # Outline
-    target.rectangle((x, y, x + width, y + height), outline=0, width=2)
-    target.rectangle((x + width, y + 4, x + width + cap_width, y + height - 4), fill=0)
-
-    # Fill level
-    if level >= 0:
-        fill_w = int((width - 4) * (level / 100.0))
-        target.rectangle((x + 2, y + 2, x + 2 + fill_w, y + height - 2), fill=0)
-
-    # Text left of icon
-    w, h = target.textsize(pct_txt, font=font)
-    target.text((x - w - 5, y + (height - h) // 2), pct_txt, font=font, fill=0)
-
 # ---------- E-paper helpers ----------
-def draw_screen(epd, time_txt, date_txt, song_txt, battery_level):
+def draw_screen(epd, time_txt, date_txt, song_txt):
+    """
+    Tri-color panel: build black & red frames, then full refresh.
+    We’ll keep everything in black for clarity; switch song to red by drawing on frame_red.
+    """
+    # Dimensions for tri-color driver (note the swap width/height convention)
     width = epd2in13b_V4.EPD_HEIGHT
     height = epd2in13b_V4.EPD_WIDTH
 
-    frame_black = PILImage.new('1', (width, height), 255)
+    frame_black = PILImage.new('1', (width, height), 255)  # white background
     frame_red   = PILImage.new('1', (width, height), 255)
 
     draw_b = ImageDraw.Draw(frame_black)
@@ -111,12 +66,8 @@ def draw_screen(epd, time_txt, date_txt, song_txt, battery_level):
     font_time = ImageFont.truetype(FONT_TIME_PATH, FONT_TIME_SIZE)
     font_date = ImageFont.truetype(FONT_TEXT_PATH, FONT_DATE_SIZE)
     font_song = ImageFont.truetype(FONT_TEXT_PATH, FONT_SONG_SIZE)
-    font_batt = ImageFont.truetype(FONT_TEXT_PATH, 12)
 
-    # Battery top-right
-    draw_battery(draw_b, draw_r, width - 40, 5, battery_level, font_batt)
-
-    # Center text
+    # Measure text to center
     w_time, h_time = draw_b.textsize(time_txt, font=font_time)
     w_date, h_date = draw_b.textsize(date_txt, font=font_date)
     w_song, h_song = draw_b.textsize(song_txt, font=font_song)
@@ -130,11 +81,14 @@ def draw_screen(epd, time_txt, date_txt, song_txt, battery_level):
     x_song = (width - w_song) // 2
     y_song = y_date + h_date + 10
 
+    # Draw in black (set song in red if you want it to pop: draw on draw_r instead)
     draw_b.text((x_time, y_time), time_txt, font=font_time, fill=0)
     draw_b.text((x_date, y_date), date_txt, font=font_date, fill=0)
     draw_b.text((x_song, y_song), song_txt, font=font_song, fill=0)
+    # Example to make song red, comment the black line above and uncomment below:
+    # draw_r.text((x_song, y_song), song_txt, font=font_song, fill=0)
 
-    # Rotate
+    # Apply rotation
     if ROTATE == 180:
         frame_black = frame_black.transpose(PILImage.ROTATE_180)
         frame_red   = frame_red.transpose(PILImage.ROTATE_180)
@@ -145,36 +99,36 @@ def draw_screen(epd, time_txt, date_txt, song_txt, battery_level):
         frame_black = frame_black.transpose(PILImage.ROTATE_270)
         frame_red   = frame_red.transpose(PILImage.ROTATE_270)
 
+    # Send both layers (full update; tri-color panels don’t support partial)
     epd.display(epd.getbuffer(frame_black), epd.getbuffer(frame_red))
 
-# ---------- Main loop ----------
 def main():
     print("Initializing screen...")
     epd = epd2in13b_V4.EPD()
     epd.init()
-    epd.Clear()
+    epd.Clear()  # one clean full-clear at start
 
     prev_minute = None
     prev_song = None
-    prev_batt = None
 
     try:
         while True:
             now = localtime()
-            time_txt = strftime("%H:%M", now)
-            date_txt = strftime("%a, %d %b %Y", now)
-            song_txt = get_song_title_only()
-            battery_level = get_battery_level()
+            time_txt = strftime("%H:%M", now)          # big clock (no seconds = less churn)
+            date_txt = strftime("%a, %d %b %Y", now)   # small date
+            song_txt = get_song_title_only()           # title only
 
             minute = now.tm_min
 
-            if minute != prev_minute or song_txt != prev_song or battery_level != prev_batt:
-                print(f"Update @ {strftime('%H:%M:%S', now)} | song: {song_txt} | batt: {battery_level}%")
-                draw_screen(epd, time_txt, date_txt, song_txt, battery_level)
+            # Refresh only if something changed
+            if minute != prev_minute or song_txt != prev_song:
+                print(f"Update @ {strftime('%H:%M:%S', now)} | song: {song_txt}")
+                draw_screen(epd, time_txt, date_txt, song_txt)
                 prev_minute = minute
                 prev_song = song_txt
-                prev_batt = battery_level
+                # Put panel to sleep between updates to save power
                 epd.sleep()
+                # Re-init right before next potential update to keep things simple
                 epd.init()
 
             time.sleep(POLL_SEC)
